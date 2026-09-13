@@ -207,7 +207,9 @@ def defect_score(result: dict[str, Any], sensitivity: float = 1.0) -> float:
 
     A score of 0.5 sits on the decision boundary; higher means the frame
     looks more like a failing print. Sensitivity scales how aggressively
-    the prototype distance margin moves the score away from 0.5.
+    the prototype distance margin moves the score away from 0.5. Community
+    model probabilities use the same sensitivity around 0.5; at sensitivity
+    1.0 their probability is the score.
 
     Args:
         result: Output of classify().
@@ -216,6 +218,11 @@ def defect_score(result: dict[str, Any], sensitivity: float = 1.0) -> float:
     Returns:
         Defect score clamped to [0, 1].
     """
+    if "failure_probability" in result:
+        probability = float(result["failure_probability"])
+        if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            raise ValueError("failure_probability must be finite and between zero and one")
+        return max(0.0, min(1.0, 0.5 + sensitivity * (probability - 0.5)))
     distances = result.get("distances") or {}
     if "success" not in distances or "failure" not in distances:
         return 0.5

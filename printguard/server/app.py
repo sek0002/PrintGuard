@@ -353,7 +353,8 @@ def create_app() -> FastAPI:
 
     app.mount("/api/v1", api_app)
     app.mount("/mcp", mcp_app)
-    app.mount("/models", StaticFiles(directory=model_dir), name="models")
+    browser_model_dir = REPO_ROOT / "models" if (model_dir / "model.json").is_file() else model_dir
+    app.mount("/models", StaticFiles(directory=browser_model_dir), name="models")
     if static_dir.is_dir():
         app.mount("/", WebStaticFiles(directory=static_dir, html=True), name="ui")
     return app

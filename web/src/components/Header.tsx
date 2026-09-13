@@ -163,7 +163,7 @@ export function Header() {
   const stats = engine?.stats;
   return (
     <header className="sticky top-0 z-30 border-b border-line-0 bg-ink-0/90 backdrop-blur-sm">
-      <div className="mx-auto flex max-w-[1500px] items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6">
         <Wordmark />
         {mode === "local" && (
           <button
@@ -180,6 +180,11 @@ export function Header() {
         <GuideChip />
         <ReportChip />
         <div className="flex-1" />
+        {engine?.model_selection && (
+          <button className="chip cursor-pointer max-w-40 truncate hover:opacity-80" onClick={() => openSettings("models")} aria-label="Switch detection model" title={engine.models.find((m) => m.id === engine.settings.model_id)?.name}>
+            Model ▾
+          </button>
+        )}
         {stats && (
           <div className="flex items-center gap-5 md:mr-2">
             <Readout

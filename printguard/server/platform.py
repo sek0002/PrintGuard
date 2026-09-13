@@ -30,6 +30,8 @@ from ..engine import vision
 from ..engine.platform import Frame
 from .bambu_camera import open_bambu_jpeg_stream
 from .inference import Inference
+from .model_profile import ModelProfile
+from .model_library import ModelLibrary
 from .mediamtx import MediaMTX, pull_source
 from .plugins import WasmPluginRuntime
 from .publish import H264Push
@@ -512,6 +514,7 @@ class ServerPlatform:
 
     mode = "hub"
     update_repo = "oliverbravery/PrintGuard"
+    model_selection = True
 
     def __init__(
         self, model_dir: Path, data_dir: Path, mediamtx_api: str, mediamtx_rtsp: str, update_asset: str | None = None
@@ -521,12 +524,18 @@ class ServerPlatform:
         self.host = deployment(update_asset is not None)
         data_dir.mkdir(parents=True, exist_ok=True)
         self._model_dir = model_dir
+        self._library = ModelLibrary(model_dir, Path(os.environ.get("MODEL_LIBRARY_DIR", str(data_dir / "models"))))
         self._inference: Inference | None = None
+        self._inference_users: dict[Inference, int] = {}
+        self._retired_inference: set[Inference] = set()
         self.workers = 1
         self.inference_device = "Initialising"
-        meta = json.loads((model_dir / "metadata.json").read_text())
-        protos = json.loads((model_dir / "prototypes.json").read_text())["prototypes"]
-        self.assets = vision.assets_from_dicts(meta, protos)
+        self._model_profile = ModelProfile.load(model_dir)
+        self.assets = None
+        if self._model_profile is None:
+            meta = json.loads((model_dir / "metadata.json").read_text())
+            protos = json.loads((model_dir / "prototypes.json").read_text())["prototypes"]
+            self.assets = vision.assets_from_dicts(meta, protos)
         self._state_path = data_dir / "state.json"
         self._client = httpx.AsyncClient(follow_redirects=True)
         self.mediamtx = MediaMTX(mediamtx_api, mediamtx_rtsp, self._client)
@@ -536,16 +545,45 @@ class ServerPlatform:
         if self.plugin_runtime is None:
             logger.warning("plugins are disabled by PRINTGUARD_PLUGINS=off")
 
+    @property
+    def models(self) -> list[dict[str, Any]]:
+        """Returns installed model metadata for the dashboard."""
+        return self._library.entries
+
+    async def refresh_models(self) -> None:
+        """Rescans the persistent model library."""
+        await asyncio.to_thread(self._library.refresh)
+
     async def configure(self, settings: dict[str, Any]) -> None:
         """Selects the requested inference runtime."""
         runtime = settings["inference_runtime"]
-        inference = await asyncio.to_thread(Inference, self._model_dir, runtime)
+        model_dir = self._library.resolve(settings.get("model_id", "default"))
+        profile = ModelProfile.load(model_dir)
+        assets = None
+        if profile is None:
+            meta = json.loads((model_dir / "metadata.json").read_text())
+            protos = json.loads((model_dir / "prototypes.json").read_text())["prototypes"]
+            assets = vision.assets_from_dicts(meta, protos)
+        task = asyncio.create_task(asyncio.to_thread(Inference, model_dir, runtime, profile))
+        try:
+            inference = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            def release(completed: asyncio.Task) -> None:
+                if not completed.cancelled() and completed.exception() is None:
+                    completed.result().close()
+            task.add_done_callback(release)
+            raise
+        self._model_profile = profile
+        self.assets = assets
         previous = self._inference
         self._inference = inference
         self.workers = inference.workers
         self.inference_device = inference.device
         if previous is not None:
-            previous.close()
+            if self._inference_users.get(previous, 0):
+                self._retired_inference.add(previous)
+            else:
+                previous.close()
         logger.info(
             "inference ready: %s via %s (%d workers, %.0f fps)",
             self.inference_device,
@@ -562,8 +600,21 @@ class ServerPlatform:
 
     async def infer(self, rgb: np.ndarray) -> dict[str, Any]:
         """Runs the model through the selected hardware provider."""
-        tensor = await asyncio.to_thread(vision.preprocess, rgb, self.assets)
-        return vision.classify(await self._inference.run(tensor), self.assets)
+        inference, profile, assets = self._inference, self._model_profile, self.assets
+        self._inference_users[inference] = self._inference_users.get(inference, 0) + 1
+        try:
+            if profile is not None:
+                tensor = await asyncio.to_thread(profile.preprocess, rgb)
+                return profile.classify(await inference.run(tensor))
+            tensor = await asyncio.to_thread(vision.preprocess, rgb, assets)
+            return vision.classify(await inference.run(tensor), assets)
+        finally:
+            self._inference_users[inference] -= 1
+            if self._inference_users[inference] == 0:
+                del self._inference_users[inference]
+                if inference in self._retired_inference:
+                    self._retired_inference.remove(inference)
+                    inference.close()
 
     async def discover_cameras(self) -> list[dict[str, Any]]:
         """Lists the host's video devices and active MediaMTX paths as attachable sources.

@@ -24,3 +24,5 @@ Start at the [README](../README.md) to install PrintGuard. These pages cover eve
 - Hub mode is PrintGuard running as a server, either the Docker container or the desktop app. Local mode is the same engine running inside a browser tab with no server at all. [Architecture](architecture.md) explains why they cannot drift apart.
 - A camera is a video source and a printer is a connection to a print service. A monitor binds one of each, the printer optionally, and carries the detection thresholds.
 - Commands shown as `docker run` assume the standard image. Compose users can apply the same options in [`docker-compose.yaml`](../docker-compose.yaml).
+
+[Installed community model library](model-library.md) records assessed releases, sources and installation limits.

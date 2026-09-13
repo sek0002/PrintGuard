@@ -127,6 +127,8 @@ class ProviderTest(BaseModel):
 
 
 class SettingsPatch(BaseModel):
+    model_presets_enabled: bool | None = None
+    model_id: str | None = None
     notifiers: dict[str, dict[str, Any]] | None = None
     mqtt: dict[str, Any] | None = None
     inference_runtime: Literal["auto", "litert", "onnx"] | None = None
@@ -448,7 +450,7 @@ def build_api_app(auth: ApiAuth) -> FastAPI:
     @api.patch("/settings", operation_id="update_settings", tags=["manage"])
     async def update_settings(body: SettingsPatch, engine: Engine = Depends(get_engine)) -> dict[str, Any]:
         """Updates engine settings such as configured notifiers."""
-        await engine.request({"cmd": "settings.update", "patch": body.model_dump(exclude_none=True)})
+        await engine.request({"cmd": "settings.update", "patch": body.model_dump(exclude_none=True)}, timeout=120.0)
         return public_state(engine)["settings"]
 
     @api.post("/notifiers/test", operation_id="test_notifier", tags=["manage"])

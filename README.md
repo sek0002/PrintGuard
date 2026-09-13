@@ -250,11 +250,18 @@ the API and the sandbox details.
 
 ## How the detector works
 
-The detector is a ShuffleNetV2 encoder classified by nearest prototype, trained for few-shot
+The default detector is a ShuffleNetV2 encoder classified by nearest prototype, trained for few-shot
 FDM fault detection in
 [Edge-FDM-Fault-Detection](https://github.com/oliverbravery/Edge-FDM-Fault-Detection), which
 has an accompanying technical paper. The sensitivity and threshold sliders map straight onto
 the prototype distances, so you can tune for your camera and lighting without retraining.
+
+Hub and desktop mode also accept community ONNX and TFLite classifiers, decoded YOLOv5/YOLOv8 exports,
+and the official Spaghetti Detective (Obico) ONNX model. Use **Model ▾** in the dashboard
+header or **Settings → Models** to switch installed models without restarting. Place each
+model and its `model.json` profile in a subdirectory of `/data/models`. Saved test presets
+can apply model-specific sensitivity, threshold and tested consecutive counts when switching. [Custom models](docs/hardware.md#custom-models)
+has ready-to-copy profiles and setup steps. Browser-local mode uses the bundled model.
 
 ## Documentation
 
@@ -289,3 +296,5 @@ and monthly both work, and nothing in PrintGuard is ever locked behind it.
 ## Licence
 
 [GPL-2.0-only](LICENSE.md).
+
+[Installed community model library](docs/model-library.md) records assessed releases, sources and installation limits.

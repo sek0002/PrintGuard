@@ -84,6 +84,12 @@ class FakePlatform:
         self.state: dict[str, Any] = {}
         self.inference_runtime = "auto"
 
+    model_selection = False
+    models = [{"id": "default", "name": "PrintGuard bundled", "runtimes": ["auto", "onnx", "litert"], "error": None}]
+
+    async def refresh_models(self) -> None:
+        """Keeps the bundled model catalogue unchanged."""
+
     async def configure(self, settings: dict[str, Any]) -> None:
         """Records the selected inference runtime."""
         self.inference_runtime = settings["inference_runtime"]

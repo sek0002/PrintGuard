@@ -279,3 +279,17 @@ than per-camera. It appears in:
 To poll one camera's current verdict, read `GET /cameras/{id}` and take
 `last_result.prediction`. For the smoothed score or a threshold-applied verdict, read the
 monitor or the `result` events.
+
+### Installed models
+
+The state response includes `models` (installed metadata, compatible runtimes and validation
+errors) and `model_selection` (whether switching is supported). With a manage token, send
+`PATCH /api/v1/settings` with `{"model_id":"obico-classic"}` to select an installed model.
+The server allows up to 120 seconds for model validation and loading. A failed switch keeps
+the previous settings. The dashboard uses `settings.update` and `models.refresh` over the
+shared command protocol. See [Custom models](hardware.md#custom-models).
+
+`PATCH /api/v1/settings` accepts `model_presets_enabled`. Setting it to `true` applies the
+active model's tested sensitivity, threshold and optional consecutive count to every monitor and enables presets on
+future model switches. Setting it to `false` preserves manual tuning across switches.
+Each `models` entry may include `recommendation` with preset values and evaluation limits.

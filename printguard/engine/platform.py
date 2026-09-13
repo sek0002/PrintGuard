@@ -113,6 +113,13 @@ class Platform(Protocol):
     """Sandbox for the background half of plugins, or None where the runtime
     lives outside the engine (the browser runs it in its own sandbox)."""
 
+    model_selection: bool
+    models: list[dict[str, Any]]
+
+    async def refresh_models(self) -> None:
+        """Refreshes metadata for available models."""
+        ...
+
     async def configure(self, settings: dict[str, Any]) -> None:
         """Applies platform-owned settings before inference starts."""
         ...

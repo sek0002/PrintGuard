@@ -54,6 +54,8 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
     "glass": {"opacity": 0.0, "tone": 0.0},
     "layout": {},
     "inference_runtime": "auto",
+    "model_id": "default",
+    "model_presets_enabled": False,
     "catalogue_url": plugins.CATALOGUE_URL,
     "fault_grace_s": GRACE_DEFAULT_S,
 }
@@ -73,6 +75,7 @@ class Engine:
         self.tokens = TokenRegistry()
         self.plugins = PluginRegistry()
         self.catalogue: list[dict[str, Any]] = []
+        self._settings_lock = asyncio.Lock()
         self.settings: dict[str, Any] = dict(SETTINGS_DEFAULTS)
         self.update: dict[str, Any] | None = None
         self.releases: list[dict[str, Any]] = []
@@ -106,6 +109,7 @@ class Engine:
             "notify.test": self._cmd_notify_test,
             "notify.send": self._cmd_notify_send,
             "settings.update": self._cmd_settings_update,
+            "models.refresh": self._cmd_models_refresh,
             "token.create": self._cmd_token_create,
             "token.remove": self._cmd_token_remove,
             "update.check": self._cmd_update_check,
@@ -266,6 +270,8 @@ class Engine:
                 for monitor in self.monitors.values()
             ],
             "settings": self.settings,
+            "models": self.platform.models,
+            "model_selection": self.platform.model_selection,
             "tokens": [t.public() for t in self.tokens.values()],
             "stats": self.scheduler.stats(),
             "integrations": integrations_meta(),
@@ -763,16 +769,54 @@ class Engine:
         except Exception as exc:
             self.emit({"event": "notify_test", "provider": adapter.id, "ok": False, "error": str(exc), "req_id": message.get("req_id")})
 
+    async def _cmd_models_refresh(self, message: dict[str, Any]) -> None:
+        async with self._settings_lock:
+            await self.platform.refresh_models()
+
     async def _cmd_settings_update(self, message: dict[str, Any]) -> None:
-        patch = {k: v for k, v in message.get("patch", {}).items() if k in SETTINGS_DEFAULTS}
-        settings = {**self.settings, **patch}
-        if settings["inference_runtime"] not in ("auto", "litert", "onnx"):
-            raise ValueError("inference runtime must be auto, litert or onnx")
-        settings["fault_grace_s"] = clamp_grace(settings["fault_grace_s"])
-        if settings["inference_runtime"] != self.settings["inference_runtime"]:
-            await self.scheduler.reconfigure(lambda: self.platform.configure(settings))
-        self.settings = settings
-        logger.info("settings updated: %s", sorted(patch))
+        async with self._settings_lock:
+            patch = {k: v for k, v in message.get("patch", {}).items() if k in SETTINGS_DEFAULTS}
+            settings = {**self.settings, **patch}
+            selected = next((model for model in self.platform.models if model["id"] == settings["model_id"]), None)
+            if selected is None or selected.get("error"):
+                raise ValueError("Choose an available installed model")
+            changed = settings["model_id"] != self.settings["model_id"]
+            if not isinstance(settings["model_presets_enabled"], bool):
+                raise ValueError("model_presets_enabled must be true or false")
+            apply_preset = settings["model_presets_enabled"] and (
+                changed or "model_presets_enabled" in patch
+            )
+            preset = selected.get("recommendation") if apply_preset else None
+            if changed and not self.platform.model_selection:
+                raise ValueError("Model selection is unavailable on this platform")
+            if changed and "inference_runtime" not in patch:
+                settings["inference_runtime"] = "auto"
+            if settings["inference_runtime"] not in selected["runtimes"]:
+                raise ValueError("Choose a compatible inference runtime for this model")
+            settings["fault_grace_s"] = clamp_grace(settings["fault_grace_s"])
+            if changed or settings["inference_runtime"] != self.settings["inference_runtime"]:
+                async def configure() -> None:
+                    await self.platform.configure(settings)
+                    if changed:
+                        self._results.clear()
+                        self._result_emitted_at.clear()
+                        self.watchdog.reset_detection()
+                        for camera in self.cameras.values():
+                            camera.last_result = None
+                    self.settings = settings
+                await self.scheduler.reconfigure(configure)
+            else:
+                self.settings = settings
+            if preset is not None:
+                for monitor in self.monitors.values():
+                    monitor.update(sanitise_monitor(monitor["id"], {
+                        "sensitivity": preset["sensitivity"], "threshold": preset["threshold"],
+                        **({"consecutive": preset["consecutive"]} if preset.get("consecutive") is not None else {}),
+                    }, monitor))
+                self._results.clear()
+                self._result_emitted_at.clear()
+                self.watchdog.reset_detection()
+            logger.info("settings updated: %s", sorted(patch))
 
     async def _cmd_token_create(self, message: dict[str, Any]) -> None:
         name = str(message.get("name") or "token").strip() or "token"

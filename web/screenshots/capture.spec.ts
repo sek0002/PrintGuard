@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test, type Browser, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import type { Camera, EngineState, Monitor, Printer, ScorePoint } from "../src/types";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +39,12 @@ const history: Record<string, ScorePoint[]> = {
 function engine(): EngineState {
   return {
     mode: "hub",
+    model_selection: true,
+    models: [
+      { id: "default", name: "PrintGuard bundled", source: "", license: "GPL-2.0-only", status: "Bundled", notes: "The default PrintGuard detector.", runtimes: ["auto", "litert", "onnx"], error: null },
+      { id: "obico-classic", recommendation: { sensitivity: 1.0, threshold: 0.35, consecutive: 3, recommended: true, summary: "Example preset. Validate against your camera and prints before relying on automatic actions.", evaluated_at: "2026-09-13" }, name: "Obico / The Spaghetti Detective", source: "https://github.com/TheSpaghettiDetective/obico-server", license: "AGPL-3.0 upstream repository", status: "Classic public release", notes: "Official public detector. This is the classic model, not the newer Obico cloud model.", runtimes: ["auto", "onnx"], error: null },
+      { id: "forgetti-nano", name: "Forgetti Nano", source: "https://github.com/willuhmjs/forgetti", license: "AGPL-3.0 model metadata", status: "Experimental community", notes: "Spaghetti detector. YOLO11 nano.", runtimes: ["auto", "onnx"], error: null },
+    ],
     host: "docker", version: VERSION, update: null,
     cameras: [
       camera("c1", "Workshop · Prusa", { kind: "rtsp", url: "rtsp://10.0.0.21:8554/prusa" }, true),
@@ -54,7 +60,7 @@ function engine(): EngineState {
       monitor("m2", "Ender 3 V3", "c2", "p2", true),
       monitor("m3", "Bambu X1C", "c3", ""),
     ],
-    settings: { notifiers: {}, update_check: true, theme: "dark", themes: [], layout: {}, inference_runtime: "auto", catalogue_url: "", fault_grace_s: 120 },
+    settings: { model_id: "default", notifiers: {}, update_check: true, theme: "dark", themes: [], layout: {}, inference_runtime: "auto", catalogue_url: "", fault_grace_s: 120 },
     tokens: [], stats: { inference_device: "CPU", infer_ms: 18, capacity_fps: 1783 }, integrations: [], notifiers: [],
     plugins: [], plugin_permissions: PERMISSIONS, plugin_events: {}, plugin_platforms: PLATFORMS, plugin_host: true,
     plugin_event_permissions: { state: "state:read", frame: "camera:frames", history: "history:read" },
@@ -197,6 +203,7 @@ const live = (e: EngineState) => {
 };
 
 const SCENES: Scene[] = [
+  { name: "models", width: 1360, height: 860, theme: "dark", settingsTab: "models", prepare: async (page) => { await page.locator("#detection-model").selectOption("obico-classic"); } },
   { name: "dashboard", width: 1360, height: 620, theme: "dark" },
   { name: "dashboard-light", width: 1360, height: 620, theme: "light" },
   { name: "printer-detail", width: 1360, height: 760, theme: "dark", detailId: "m1" },
@@ -528,4 +535,34 @@ for (const crop of CROPS) {
       await captureCrop(browser, crop, theme);
     });
   }
+}
+
+for (const width of [390, 1360]) {
+  test(`model switch interaction ${width}`, async ({ browser }) => {
+    const { page, close } = await stage(browser, { name: "model-interaction", width, height: 860, theme: "dark" });
+    try {
+      await page.getByRole("button", { name: "Switch detection model" }).click();
+      await expect(page.locator("#detection-model")).toBeVisible();
+      await page.evaluate(() => {
+        const scope = window as any;
+        scope.__pg.setState({ link: { send: (message: unknown) => { scope.modelCommand = message; } } });
+      });
+      await page.locator("#detection-model").selectOption("obico-classic");
+      await page.getByRole("button", { name: "Use model", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Switching…", exact: true })).toBeDisabled();
+      const command = await page.evaluate(() => (window as any).modelCommand);
+      expect(command.cmd).toBe("settings.update");
+      expect(command.patch).toEqual({ model_id: "obico-classic" });
+      await page.evaluate(() => {
+        const store = (window as any).__pg;
+        const current = store.getState().engine;
+        store.setState({ engine: { ...current, settings: { ...current.settings, model_id: "obico-classic" } }, pending: {} });
+      });
+      await expect(page.getByText("This model is active", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Use model", exact: true })).toBeDisabled();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    } finally {
+      await close();
+    }
+  });
 }

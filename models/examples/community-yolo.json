@@ -1,0 +1,9 @@
+{
+  "file": "detector.onnx",
+  "format": "yolo_v8",
+  "width": 640,
+  "height": 640,
+  "resize": "letterbox",
+  "classes": ["spaghetti", "print_head"],
+  "failure_classes": ["spaghetti"]
+}

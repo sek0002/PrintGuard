@@ -21,6 +21,8 @@ import numpy as np
 import onnxruntime as ort
 from ai_edge_litert.interpreter import Interpreter
 
+from .model_profile import ModelProfile
+
 InferenceRuntime = Literal["auto", "litert", "onnx"]
 Model = Callable[[np.ndarray], np.ndarray]
 
@@ -146,7 +148,8 @@ class OnnxInference:
 
     runtime = "onnx"
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(self, model_path: Path, profile: ModelProfile | None = None) -> None:
+        self._single_score = profile is not None and profile.format == "classifier" and len(profile.classes) == 1
         self._resources = ExitStack()
         self._register_plugins()
         if sys.platform == "win32":
@@ -176,7 +179,26 @@ class OnnxInference:
             )
             self.device = "ONNX CPU"
 
-        self._input_name = self._session.get_inputs()[0].name
+        inputs = self._session.get_inputs()
+        self._input_name = inputs[0].name
+        self._output_name = self._session.get_outputs()[0].name
+        if profile is not None:
+            try:
+                if len(inputs) != 1 or inputs[0].type != "tensor(float)":
+                    raise ValueError("custom models must have one float32 image input")
+                shape = inputs[0].shape
+                if len(shape) != 4 or any(
+                    isinstance(actual, int) and actual != expected
+                    for actual, expected in zip(shape, profile.input_shape)
+                ):
+                    raise ValueError(f"model input {shape} does not match profile {profile.input_shape}")
+                outputs = self._session.get_outputs()
+                if profile.selected_output >= len(outputs):
+                    raise ValueError("profile output_index does not exist in the ONNX model")
+                self._output_name = outputs[profile.selected_output].name
+            except Exception:
+                self.close()
+                raise
 
     def _register_plugins(self) -> None:
         _preload_cuda_runtime()
@@ -206,8 +228,13 @@ class OnnxInference:
             _register_library(provider.name, provider.library_path)
 
     def run(self, tensor: np.ndarray) -> np.ndarray:
-        """Returns the model embedding for one preprocessed frame."""
-        return self._session.run(None, {self._input_name: tensor})[0][0].copy()
+        """Returns the selected model output for one preprocessed frame."""
+        output = self._session.run([self._output_name], {self._input_name: tensor})[0]
+        if self._single_score and output.shape == (1,):
+            return output.copy()
+        if output.ndim < 2 or output.shape[0] != 1:
+            raise ValueError(f"model output must have a single-image batch dimension, got {output.shape}")
+        return output[0].copy()
 
     def close(self) -> None:
         """Releases provider runtimes held for the session lifetime."""
@@ -226,15 +253,22 @@ class LiteRtInference:
     runtime = "litert"
     device = "LiteRT CPU"
 
-    def __init__(self, model_path: Path) -> None:
+    def __init__(self, model_path: Path, profile: ModelProfile | None = None) -> None:
         self._model_path = str(model_path)
         self._interpreters = threading.local()
         probe = Interpreter(model_path=self._model_path, num_threads=1)
         self._input_index = probe.get_input_details()[0]["index"]
-        self._output_index = probe.get_output_details()[0]["index"]
+        inputs, outputs = probe.get_input_details(), probe.get_output_details()
+        selected = profile.selected_output if profile else 0
+        if profile and (len(inputs) != 1 or inputs[0]["dtype"] != np.float32
+                        or tuple(inputs[0]["shape"]) != profile.input_shape):
+            raise ValueError("TFLite model must have one float32 input matching the profile")
+        if selected >= len(outputs) or outputs[selected]["dtype"] != np.float32:
+            raise ValueError("Selected TFLite output must exist and contain float32 scores")
+        self._output_index = outputs[selected]["index"]
 
     def run(self, tensor: np.ndarray) -> np.ndarray:
-        """Returns the model embedding for one preprocessed frame."""
+        """Returns the selected model output for one preprocessed frame."""
         interpreter = getattr(self._interpreters, "interpreter", None)
         if interpreter is None:
             interpreter = Interpreter(model_path=self._model_path, num_threads=1)
@@ -252,13 +286,30 @@ class LiteRtInference:
 class Inference:
     """Runs the requested model runtime at the concurrency it measurably sustains."""
 
-    def __init__(self, model_dir: Path, runtime: InferenceRuntime) -> None:
+    def __init__(self, model_dir: Path, runtime: InferenceRuntime, profile: ModelProfile | None = None) -> None:
         candidates: list[OnnxInference | LiteRtInference] = []
-        if runtime in ("auto", "onnx"):
-            candidates.append(OnnxInference(model_dir / "encoder_float32.onnx"))
-        if runtime in ("auto", "litert"):
-            candidates.append(LiteRtInference(model_dir / "encoder_float32.tflite"))
-        measured = [_measure_concurrency(candidate.run) for candidate in candidates]
+        if runtime not in ("auto", "onnx", "litert"):
+            raise ValueError(f"unsupported inference runtime: {runtime}")
+        if profile is not None and runtime not in ("auto", profile.runtime):
+            raise ValueError(f"custom {profile.runtime.upper()} models require Automatic or {profile.runtime.upper()} Runtime in Settings")
+        try:
+            if runtime in ("auto", "onnx") and (profile is None or profile.runtime == "onnx"):
+                path = profile.model_path(model_dir) if profile else model_dir / "encoder_float32.onnx"
+                candidates.append(OnnxInference(path, profile))
+            if runtime in ("auto", "litert") and (profile is None or profile.runtime == "litert"):
+                path = profile.model_path(model_dir) if profile else model_dir / "encoder_float32.tflite"
+                candidates.append(LiteRtInference(path, profile))
+            benchmark = np.zeros(profile.input_shape, dtype=np.float32) if profile else BENCHMARK_TENSOR
+            if profile is not None:
+                profile.classify(candidates[0].run(benchmark))
+            measured = [
+                _measure_concurrency(lambda _, candidate=candidate: candidate.run(benchmark))
+                for candidate in candidates
+            ]
+        except Exception:
+            for candidate in candidates:
+                candidate.close()
+            raise
         logger.info(
             "inference benchmark: %s",
             ", ".join(
@@ -276,7 +327,7 @@ class Inference:
         self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="inference")
 
     async def run(self, tensor: np.ndarray) -> np.ndarray:
-        """Returns the model embedding for one preprocessed frame."""
+        """Returns the selected model output for one preprocessed frame."""
         return await asyncio.get_running_loop().run_in_executor(self._pool, self._selected.run, tensor)
 
     def close(self) -> None:

@@ -3,6 +3,7 @@ import { type SettingsTabId, useStore } from "../store";
 import { applyTheme, beginPreview, endPreview, GLASS, GLASS_DEFAULT, PALETTES } from "../theme";
 import type { ApiToken, CustomTheme, MqttConfig, ThemeBase, ThemeTokenKey } from "../types";
 import { Dialog } from "./Dialog";
+import { ModelsTab } from "./ModelsTab";
 import { PluginsTab } from "./PluginsTab";
 import { SettingsFooter } from "./SettingsFooter";
 import { SaveStatus } from "./SaveStatus";
@@ -100,6 +101,7 @@ export function SettingsDialog() {
   );
 
   const tabs: { id: SettingsTabId; label: string }[] = [
+    ...(engine?.model_selection ? [{ id: "models", label: "Models" } as const] : []),
     { id: "appearance", label: "Appearance" },
     { id: "alerts", label: "Alerts" },
     { id: "plugins", label: "Plugins" },
@@ -484,6 +486,8 @@ export function SettingsDialog() {
           </div>
         )}
 
+        {tab === "models" && <ModelsTab />}
+
         {tab === "advanced" && (
           <div
             role="tabpanel"
@@ -502,11 +506,11 @@ export function SettingsDialog() {
               onChange={(event) => updateSettings({ inference_runtime: event.target.value })}
             >
               <option value="auto">Automatic</option>
-              <option value="litert">LiteRT</option>
-              <option value="onnx">ONNX Runtime</option>
+              <option value="litert" disabled={!(engine?.models?.find((m) => m.id === engine.settings.model_id)?.runtimes ?? ["litert"]).includes("litert")}>LiteRT</option>
+              <option value="onnx" disabled={!(engine?.models?.find((m) => m.id === engine.settings.model_id)?.runtimes ?? ["onnx"]).includes("onnx")}>ONNX Runtime</option>
             </select>
             <span className="block text-[0.7rem] leading-relaxed text-text-2">
-              Automatic benchmarks both models and uses the higher-throughput runtime. ONNX Runtime can use Core ML,
+              Automatic selects a compatible runtime for the active model. ONNX Runtime can use Core ML,
               Windows ML, OpenVINO or NVIDIA hardware; LiteRT uses its optimised CPU runtime for this model.
             </span>
             <div className="flex items-center justify-between gap-3 rounded border border-line-0 px-3 py-2">

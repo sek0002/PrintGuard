@@ -190,3 +190,20 @@ async def test_a_gating_plugin_can_refuse_a_request_but_never_its_own_routes() -
     assert own.status_code == 200, "the gate locked out the very page that signs you in"
     assert other.status_code == 403, "another plugin's pages went out without the gate seeing them"
     assert health.status_code == 200, "readiness is never gated, so an uptime check still works"
+
+
+async def test_custom_hub_model_keeps_bundled_browser_assets(tmp_path, monkeypatch) -> None:
+    """Local browser inference still receives its encoder when the hub uses ONNX."""
+    (tmp_path / "model.json").write_text('{"file": "private.onnx"}')
+    (tmp_path / "private.onnx").write_bytes(b"custom model")
+    monkeypatch.setenv("MODEL_DIR", str(tmp_path))
+    app = create_app()
+    app.state.engine = SimpleNamespace(platform=SimpleNamespace(plugin_runtime=None))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        meta = await client.get("/models/metadata.json")
+        protos = await client.get("/models/prototypes.json")
+        custom = await client.get("/models/private.onnx")
+    assert meta.status_code == 200
+    assert meta.json()["model"]["tflite_file"] == "encoder_float32.tflite"
+    assert protos.status_code == 200
+    assert custom.status_code == 404

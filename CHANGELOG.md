@@ -7,6 +7,43 @@ release notes.
 The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-09-13
+
+### Added
+
+- I added optional per-model consecutive detection counts to tested presets. Switching applies a supported count alongside sensitivity and threshold; models without a tested count retain the current value. Printer actions and cooldowns stay unchanged.
+
+## [2.7.0] - 2026-09-13
+
+### Added
+
+- I added saved model tuning presets with evaluation summaries in Settings → Models.
+  Enabling tested presets applies sensitivity and threshold to all monitors when switching
+  models, with manual tuning still available. Printer actions and consecutive counts stay unchanged.
+- I distinguish provisional recommendations from trial presets that performed poorly in testing.
+
+## [2.6.0] - 2026-09-13
+
+### Added
+
+- I added **Model ▾** and **Settings → Models** to switch installed models without restarting.
+  The selector shows source, license and experimental status, and remembers the selection.
+- I added float32 TFLite profiles, center cropping and binary normal/failure classifiers.
+- I validate a selected model before replacing the active runtime, retain the previous model
+  on failure, and reset detection streaks when a different model becomes active.
+
+## [2.5.0] - 2026-09-13
+
+### Added
+
+- I added custom ONNX model profiles for hub and desktop mode, including community
+  classifiers, decoded YOLOv5/YOLOv8 detectors and the official Spaghetti Detective (Obico)
+  ONNX export. Profiles set the image dimensions, preprocessing and failure classes, and
+  existing monitor sensitivity, thresholds and actions consume the model's confidence.
+  [Custom models](docs/hardware.md#custom-models) covers setup and supported output formats.
+- I validate custom model inputs and score outputs before starting inference workers.
+  Invalid profiles and non-finite predictions report errors instead of healthy prints.
+
 ## [2.4.1] - 2026-09-01
 
 ### Added

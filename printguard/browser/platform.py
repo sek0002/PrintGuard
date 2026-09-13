@@ -118,6 +118,12 @@ class BrowserPlatform:
         protos = jsonlib.loads(await (await pyfetch("models/prototypes.json")).string())["prototypes"]
         return cls(bridge, vision.assets_from_dicts(meta, protos))
 
+    model_selection = False
+    models = [{"id": "default", "name": "PrintGuard bundled", "runtimes": ["auto", "onnx", "litert"], "error": None}]
+
+    async def refresh_models(self) -> None:
+        """Keeps the bundled model catalogue unchanged."""
+
     async def configure(self, settings: dict[str, Any]) -> None:
         """Accepts shared settings that do not alter local inference."""
 

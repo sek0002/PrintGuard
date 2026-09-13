@@ -325,7 +325,30 @@ export interface UpdateInfo {
   releases_url: string;
 }
 
+export interface ModelRecommendation {
+  consecutive?: number | null;
+  sensitivity: number;
+  threshold: number;
+  recommended: boolean;
+  summary: string;
+  evaluated_at: string;
+}
+
+export interface InstalledModel {
+  recommendation?: ModelRecommendation | null;
+  id: string;
+  name: string;
+  source: string;
+  license: string;
+  status: string;
+  notes: string;
+  runtimes: string[];
+  error: string | null;
+}
+
 export interface EngineState {
+  models: InstalledModel[];
+  model_selection: boolean;
   mode: string;
   host: string;
   version: string;
@@ -341,6 +364,8 @@ export interface EngineState {
     themes: CustomTheme[];
     glass: Glass;
     layout?: Layout;
+    model_id: string;
+    model_presets_enabled?: boolean;
     inference_runtime: "auto" | "litert" | "onnx";
     catalogue_url: string;
     fault_grace_s: number;

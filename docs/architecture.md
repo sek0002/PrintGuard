@@ -64,14 +64,32 @@ but cannot implement portably. Identical signatures, different runtimes:
 
 | Method | Hub (CPython) | Local (browser) |
 |---|---|---|
-| `configure(settings)` | Selects LiteRT, ONNX Runtime or the faster local benchmark, and measures its worker count | No-op |
-| `infer(rgb)` | Selected LiteRT or ONNX Runtime model | LiteRT.js in WASM via a JS bridge |
+| `configure(settings)` | Validates and activates the selected installed model and compatible runtime | No-op |
+| `models`, `model_selection`, `refresh_models()` | Installed model metadata, selection capability and library rescan | Fixed default model, no switching |
+| `infer(rgb)` | Bundled LiteRT/ONNX encoder or a profiled community ONNX/TFLite model | LiteRT.js in WASM via a JS bridge |
 | `discover_cameras()` | V4L2, AVFoundation or DirectShow capture devices, plus the MediaMTX path list | `enumerateDevices()` |
 | `open_camera(id, source)` | PyAV reader thread; MediaMTX pulls RTSP and WHEP streams | `getUserMedia` and canvas grabs |
 | `http(...)` | httpx | `fetch`, so CORS applies |
 | `encode_jpeg(rgb)` | PyAV mjpeg | canvas `toBlob` |
 | `load_state` / `save_state` | `data/state.json` | `localStorage` |
 | `plugin_runtime` | QuickJS in WebAssembly, under wasmtime | `None`: the browser runs workers in its own sandbox |
+
+The hub discovers bundles under `MODEL_LIBRARY_DIR` (default `/data/models`) and reads their
+`model.json` profiles. The `default` entry retains the original `MODEL_DIR` behavior.
+The state event includes `models` and `model_selection`; `settings.model_id` persists the
+selection. `models.refresh` rescans installed bundles and validated `recommendations.json`.
+`settings.model_presets_enabled` opts into applying the selected model's sensitivity, threshold and optional
+consecutive-count preset after a successful switch. Enabling it reapplies the active preset. It
+updates monitor tuning only; action policies and cooldowns stay intact. A missing consecutive count retains the existing value. Settings updates are serialized, and
+the scheduler drains active inference before a switch. Failed validation preserves the old
+runtime and settings. A successful model change clears current results and detection streaks,
+while retaining alert cooldowns. Older score history remains available. Model preprocessing and
+output interpretation live in `server/model_profile.py`, behind the existing `infer(rgb)` contract.
+Bundled encoders return prototype distances. Custom models return `failure_probability`
+alongside `prediction`, empty `distances` and a zero `margin`. Shared `vision.defect_score`
+scales that confidence around 0.5 using the monitor's sensitivity. Malformed outputs raise
+inference errors through the scheduler; no printer-action policy is implemented in a model
+adapter. [Custom model contracts](hardware.md#custom-models) describe the supported exports.
 
 The UI is presentation-only and speaks one JSON command and event protocol, over a WebSocket
 in hub mode and over an in-page Pyodide bridge in local mode. The engine cannot tell which

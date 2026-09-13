@@ -84,6 +84,10 @@ class Watchdog:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def reset_detection(self) -> None:
+        """Starts fresh detection streaks after a model switch, preserving alert cooldowns."""
+        self._streaks.clear()
+
     async def close(self) -> None:
         """Cancels pending printer actions and notifications."""
         tasks = tuple(self._tasks)

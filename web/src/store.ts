@@ -82,7 +82,7 @@ export interface Toast {
 }
 
 export type DialogKind = "cameras" | "printers" | "monitor" | "settings" | "update" | "guide" | "intro" | "report" | "demo" | null;
-export type SettingsTabId = "appearance" | "alerts" | "plugins" | "mqtt" | "updates" | "api" | "advanced";
+export type SettingsTabId = "models" | "appearance" | "alerts" | "plugins" | "mqtt" | "updates" | "api" | "advanced";
 
 interface PgStore {
   mode: Mode | null;

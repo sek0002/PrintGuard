@@ -9,6 +9,7 @@
 Find the symptom, apply the fix. Every row links to the page that explains the reasoning.
 
 - [Starting up](#starting-up)
+- [Custom models](#custom-models)
 - [Cameras and video](#cameras-and-video)
 - [Printers](#printers)
 - [Detection and alerts](#detection-and-alerts)
@@ -25,6 +26,19 @@ Find the symptom, apply the fix. Every row links to the page that explains the r
 | First launch of the desktop app is blocked | The builds are unsigned | On macOS, open Privacy & Security in System Settings and click **Open Anyway**. On Windows, choose **More info** and then **Run anyway** |
 | The desktop app opens an empty white window | Its server did not start. 2.3.7 and 2.3.8 on macOS always hit this, because Core ML could not load the model from a data directory whose path contains a space | Update to 2.3.9 or later, where the window reports what failed and shows the end of the log ([logs](#getting-logs-and-diagnostics)) |
 | Container restarts repeatedly | Usually an unwritable `/data` volume | Check the volume mount and its permissions, then read `docker logs printguard` |
+
+## Custom models
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Model missing from the selector | Bundle is outside the library, has an invalid directory name, or was added after startup | Use `/data/models/<lowercase-id>/model.json` and click Settings → Models → Refresh list |
+| Switch reports model unavailable | Profile or file is missing or invalid | Correct the bundle and refresh; the previous active model remains selected |
+| Hub reports missing `metadata.json` or `prototypes.json` | `MODEL_DIR` has no `model.json`, so the bundled encoder contract is selected | Put the custom profile in that directory, named exactly `model.json` |
+| Custom ONNX model requires Automatic or ONNX Runtime | LiteRT was pinned before changing the model | Choose a supported runtime in Advanced; changing the selected model automatically selects Automatic |
+| Input shape, class count or probability validation fails | The export does not match the profile | Check dimensions, layout, ordered class labels, output index and whether a classifier emits logits. Raw YOLO heads and exports with built-in NMS are not supported |
+| Scores change substantially after switching models | Models have different confidence distributions | Recalibrate sensitivity and threshold against representative successful and failed prints before enabling automatic printer actions |
+
+See [custom models](hardware.md#custom-models) for profiles and exact output contracts.
 
 ## Cameras and video
 

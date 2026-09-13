@@ -1,0 +1,8 @@
+{
+  "file": "model-weights.onnx",
+  "format": "obico",
+  "width": 416,
+  "height": 416,
+  "classes": ["failure"],
+  "failure_classes": ["failure"]
+}
