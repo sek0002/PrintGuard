@@ -20,8 +20,14 @@ holds for long enough, PrintGuard pauses or cancels the print through your print
 pushes a snapshot to your phone. There's no cloud and no subscription, and your camera frames
 never leave hardware you own.
 
-The detector is my own, trained for this. Against Obico's Spaghetti Detective, the only other
-open model, over the same four unseen test sets:
+In this fork, I added community model support, quick model switching and saved per-model
+tuning presets through version **2.8.0**. See [Community models and tuning](#community-models-and-tuning)
+for the controls and testing limits, and [Build this fork](#build-this-fork) to run these changes.
+The release, container and demo links above belong to the upstream project.
+
+I retain the upstream benchmark below for the original PrintGuard detector. It compares that
+detector with the classic Spaghetti Detective model on four unseen test sets; it does not
+measure the additional models or camera-specific presets in this fork.
 
 | On a Raspberry Pi 4B | PrintGuard | Spaghetti Detective |
 |---|---|---|
@@ -39,6 +45,7 @@ open model, over the same four unseen test sets:
 - [Try it now, nothing to install](#try-it-now-nothing-to-install)
 - [What you get](#what-you-get)
 - [Quick start](#quick-start)
+  - [Build this fork](#build-this-fork)
   - [Desktop app for macOS and Windows](#desktop-app-for-macos-and-windows)
   - [Docker for an always-on server or NAS](#docker-for-an-always-on-server-or-nas)
 - [Local mode and hub mode](#local-mode-and-hub-mode)
@@ -50,6 +57,7 @@ open model, over the same four unseen test sets:
 - [Automate it with MCP and the API](#automate-it-with-mcp-and-the-api)
 - [Plugins](#plugins)
 - [How the detector works](#how-the-detector-works)
+- [Community models and tuning](#community-models-and-tuning)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [Sponsor](#sponsor)
@@ -71,8 +79,30 @@ Nothing is installed and no frame leaves your device. When you are ready to run 
 - Warns you when a camera drops, a feed freezes or a printer stops answering.
 - Shares one model across as many cameras as your hardware can sustain.
 - Tunes per monitor: sensitivity, threshold, how long a defect must hold, and the cooldown.
+- I added a hub model picker for community ONNX, float32 TFLite and classic Obico models.
+- I added optional per-model sensitivity, threshold and tested consecutive detection presets.
 
 ## Quick start
+
+### Build this fork
+
+I build the community-model version from this branch:
+
+```bash
+git clone --branch codex/community-model-presets https://github.com/sek0002/PrintGuard.git
+cd PrintGuard
+docker build -t printguard-community:2.8.0 .
+docker run -d --name printguard --restart unless-stopped \
+  -p 8000:8000 -p 8554:8554 \
+  -v printguard:/data \
+  printguard-community:2.8.0
+```
+
+I use this example for a fresh installation. For an existing hub, I back up and reuse its
+data volume when replacing the container. I store additional model weights, profiles and
+camera-specific presets in that volume; cloning this repository does not install them.
+[Custom model setup](docs/hardware.md#custom-models) explains the required files.
+The download and image commands below refer to upstream distributions.
 
 ### Desktop app for macOS and Windows
 
@@ -256,12 +286,61 @@ FDM fault detection in
 has an accompanying technical paper. The sensitivity and threshold sliders map straight onto
 the prototype distances, so you can tune for your camera and lighting without retraining.
 
-Hub and desktop mode also accept community ONNX and TFLite classifiers, decoded YOLOv5/YOLOv8 exports,
-and the official Spaghetti Detective (Obico) ONNX model. Use **Model ▾** in the dashboard
-header or **Settings → Models** to switch installed models without restarting. Place each
-model and its `model.json` profile in a subdirectory of `/data/models`. Saved test presets
-can apply model-specific sensitivity, threshold and tested consecutive counts when switching. [Custom models](docs/hardware.md#custom-models)
-has ready-to-copy profiles and setup steps. Browser-local mode uses the bundled model.
+## Community models and tuning
+
+I added support for community ONNX and float32 TFLite classifiers, decoded YOLOv5/YOLOv8-style
+exports, and the classic Spaghetti Detective (Obico) ONNX model in hub mode. Browser-local
+mode continues to use the bundled detector.
+
+I switch models through **Model ▾ → choose a model → Use model**, or **Settings → Models**.
+The selection applies to every monitor. Detection pauses while the new model loads, then
+resumes with fresh detection streaks. If loading fails, I keep the previous model active.
+The selector shows each model's source, declared license, experimental status and any saved
+test summary. After adding a bundle under `/data/models`, I use **Refresh list** to discover it.
+
+![Model selector with source information and per-model tuning presets](docs/assets/models.png)
+
+I can enable **Use each model’s tested preset when switching** to apply its sensitivity,
+threshold and supported consecutive count to all monitors. **Apply tested settings** reapplies
+the active model's preset. With presets disabled, I keep manual settings; a missing preset
+keeps all current values, and a missing tested count keeps the current consecutive count.
+Printer actions and cooldowns are preserved.
+
+| Control | How I use it |
+|---|---|
+| Sensitivity | For community models, I scale the failure confidence around 0.5: `score = clip(0.5 + sensitivity × (confidence − 0.5), 0, 1)`. At 1.0, the score equals the model's confidence. Higher sensitivity moves scores away from 0.5; it does not raise every score. The default detector instead scales its prototype-distance margin. |
+| Threshold | I count a scored frame as a detection when its score is at least this value. Lower values accept more detections, including possible healthy-print false alarms. |
+| Consecutive detections | I require this many successive scored detections before the configured response is eligible. A score below threshold resets the streak. This is a frame count, not seconds; inference speed and cooldown also affect response timing. |
+
+### Models assessed and testing limits
+
+I installed and checked **14 distinct detectors** on the test deployment: the default model,
+Forgetti Nano and Small, Javiai YOLOv5, the Klipper community detector, MobileNetV2 versions
+v2/v3/v4, MobileViT XXS, classic Obico, PatchCore, two YOLO11 defect models and the YOLOv8
+fault detector. I record sources, license declarations, hashes and excluded duplicates in the
+[model library](docs/model-library.md). The additional weights and deployment presets are
+not bundled in this repository. A model with no stated license is not public domain.
+
+I compared all 14 models using saved images from one confirmed healthy print and one confirmed
+failed print, then replayed each model's scores at consecutive counts **1–30**. I fitted counts
+on 30 healthy and 20 failed frames and checked them on another 30 healthy and 20 failed frames.
+
+| Sequence-check result | Saved consecutive count |
+|---|---|
+| MobileNetV2 community v2 | 3 |
+| MobileViT XXS | 3 |
+| Other 12 models | No qualifying count; retain the monitor's current value |
+
+I required a count to suppress every healthy test streak while retaining at least one failed
+test streak. Passing this check does not establish overall detection quality: all current
+camera-specific presets remain labelled **trial**, rather than general recommendations.
+The saved frames were sampled about 1.5 seconds apart and are correlated within each print.
+I have not established full-rate failure-onset latency or performance across different
+printers, materials and lighting. I keep private camera images and deployment credentials
+out of this repository.
+
+I document profile formats, preprocessing and preset files in
+[Custom models](docs/hardware.md#custom-models).
 
 ## Documentation
 
@@ -269,6 +348,7 @@ has ready-to-copy profiles and setup steps. Browser-local mode uses the bundled 
 |---|---|
 | [docs/printers.md](docs/printers.md) | Printers, cameras, notification channels, and the networking caveats |
 | [docs/hardware.md](docs/hardware.md) | Image variants, model runtimes, GPU and NPU acceleration |
+| [docs/model-library.md](docs/model-library.md) | Assessed community models, sources, declared licenses and installation limits |
 | [docs/deployment.md](docs/deployment.md) | Reaching a hub from outside your LAN, and hardening it |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom-first fixes, and how to pull logs and diagnostics |
 | [docs/api.md](docs/api.md) | REST API and MCP server, scoped tokens, every endpoint and tool |
@@ -296,5 +376,3 @@ and monthly both work, and nothing in PrintGuard is ever locked behind it.
 ## Licence
 
 [GPL-2.0-only](LICENSE.md).
-
-[Installed community model library](docs/model-library.md) records assessed releases, sources and installation limits.
