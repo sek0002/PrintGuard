@@ -210,6 +210,10 @@ automatically. Experimental model scores need evaluation on your own camera and 
 values to all monitors. Enabling it also applies the active model’s preset immediately;
 **Apply tested settings** reapplies that preset after manual edits. Disable the option to
 keep manual slider values across switches. Cooldowns, notifications and printer actions are never changed by a preset.
+I preserve the two-stage response mode, pause trigger and alert-count requirement when applying
+model presets. The pause threshold is raised only if needed to keep it at or above the new
+alert threshold. Presets do not calibrate the pause threshold; I review both thresholds after
+a model or sensitivity change.
 A missing or null consecutive count preserves the monitor’s current count. Switching to a model
 without a preset retains the current slider values.
 

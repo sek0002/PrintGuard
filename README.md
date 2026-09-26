@@ -21,7 +21,7 @@ pushes a snapshot to your phone. There's no cloud and no subscription, and your 
 never leave hardware you own.
 
 In this fork, I added community model support, quick model switching and saved per-model
-tuning presets through version **2.8.0**. See [Community models and tuning](#community-models-and-tuning)
+tuning presets through version **2.9.0**. See [Community models and tuning](#community-models-and-tuning)
 for the controls and testing limits, and [Build this fork](#build-this-fork) to run these changes.
 The release, container and demo links above belong to the upstream project.
 
@@ -91,11 +91,11 @@ I build the community-model version from this branch:
 ```bash
 git clone --branch codex/community-model-presets https://github.com/sek0002/PrintGuard.git
 cd PrintGuard
-docker build -t printguard-community:2.8.0 .
+docker build -t printguard-community:2.9.0 .
 docker run -d --name printguard --restart unless-stopped \
   -p 8000:8000 -p 8554:8554 \
   -v printguard:/data \
-  printguard-community:2.8.0
+  printguard-community:2.9.0
 ```
 
 I use this example for a fresh installation. For an existing hub, I back up and reuse its
@@ -217,6 +217,28 @@ for you.
 
 Connecting over Docker or HTTPS has a gotcha or two, as does linking an Elegoo, Prusa or Bambu
 printer. The full walk-through is in **[docs/printers.md](docs/printers.md)**.
+
+### Alert first, then pause
+
+I enable **Alert first, then pause** in a monitor's **Defect response** settings to use two
+thresholds. The existing **Alert threshold** and **Consecutive detections to alert** produce
+alert-only events. I choose a separate **Pause threshold**, or use **Use current score**, and
+set how many **Consecutive alerts before pause** to require.
+
+| Pause when | Condition |
+|---|---|
+| Live score | One reading reaches the pause threshold |
+| Alert count | The configured number of alert events is reached |
+| Either | The live score or the alert count qualifies |
+| Both | The live score qualifies and the alert count has been reached |
+
+I count alert events after the detection streak and cooldown, independently of push delivery.
+A reading below the first threshold resets the count. Pausing bypasses the alert cooldown,
+with one pause attempt (including bounded retries) per continuous defect. Recovery, standby,
+model switches and detection setting changes reset escalation. Existing monitors retain their
+single-stage behaviour until I enable this option; pausing requires a linked printer.
+
+![Two-stage alert and pause controls](docs/assets/two-stage.png)
 
 ## Hardware acceleration
 

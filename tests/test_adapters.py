@@ -802,3 +802,16 @@ def test_classify_rejects_non_finite_embeddings() -> None:
     good = vision.classify(np.zeros(4, np.float32), assets)
     assert good["prediction"] == "success"
     assert good["margin"] == 2.0
+
+
+def test_two_stage_monitor_defaults_and_limits() -> None:
+    record = sanitise_monitor('m', {'threshold': .8, 'pause_threshold': .2, 'pause_alerts': 100})
+    assert record['response_mode'] == 'single'
+    assert record['pause_trigger'] == 'either'
+    assert record['pause_threshold'] == .8
+    assert record['pause_alerts'] == 30
+    updated = sanitise_monitor('m', {'response_mode': 'two_stage', 'pause_trigger': 'both'}, record)
+    assert updated['on_defect'] == 'none'
+    assert updated['pause_trigger'] == 'both'
+    with pytest.raises(ValueError):
+        sanitise_monitor('m', {'pause_trigger': 'invalid'})

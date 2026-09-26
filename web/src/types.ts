@@ -75,6 +75,10 @@ export interface Monitor {
   consecutive: number;
   notify: boolean;
   on_defect: "none" | "pause" | "cancel";
+  response_mode: "single" | "two_stage";
+  pause_trigger: "score" | "alerts" | "either" | "both";
+  pause_threshold: number;
+  pause_alerts: number;
   cooldown_s: number;
   alert?: Alert | null;
   watching?: boolean;

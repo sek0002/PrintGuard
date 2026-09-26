@@ -721,11 +721,16 @@ class Engine:
         existing = self.monitors.get(message["id"])
         if not existing:
             raise KeyError(f"no monitor {message['id']}")
-        self.monitors[message["id"]] = sanitise_monitor(message["id"], message.get("patch", {}), existing)
+        updated = sanitise_monitor(message["id"], message.get("patch", {}), existing)
+        self.monitors[message["id"]] = updated
+        policy = ("enabled", "camera_id", "printer_id", "threshold", "sensitivity", "consecutive", "on_defect", "response_mode", "pause_trigger", "pause_threshold", "pause_alerts", "cooldown_s")
+        if any(updated[k] != existing[k] for k in policy):
+            self.watchdog.reset_detection(message["id"])
 
     async def _cmd_monitor_remove(self, message: dict[str, Any]) -> None:
         if self.monitors.pop(message["id"], None) is not None:
             logger.info("monitor %s removed", message["id"])
+        self.watchdog.reset_detection(message["id"])
         self.history.pop(message["id"], None)
         self._results.pop(message["id"], None)
         self._result_emitted_at.pop(message["id"], None)

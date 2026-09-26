@@ -26,7 +26,7 @@ const printer = (id: string, name: string, provider: string, status: string, pro
 
 const monitor = (id: string, name: string, camera_id: string, printer_id: string, alerting = false): Monitor => ({
   id, name, camera_id, printer_id, enabled: true, threshold: 0.6, sensitivity: 0.5, consecutive: 3,
-  notify: true, on_defect: "pause", cooldown_s: 90, watching: true,
+  notify: true, on_defect: "pause", response_mode: "single", pause_trigger: "either", pause_threshold: 0.9, pause_alerts: 3, cooldown_s: 90, watching: true,
   alert: alerting ? { score: 0.86, action: "pause", ts: NOW } : null,
 });
 
@@ -561,6 +561,42 @@ for (const width of [390, 1360]) {
       await expect(page.getByText("This model is active", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Use model", exact: true })).toBeDisabled();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+}
+
+for (const width of [390, 1360]) {
+  test(`two-stage pause controls ${width}`, async ({ browser }) => {
+    const { page, close } = await stage(browser, { name: "two-stage", width, height: 1000, theme: "dark", detailId: "m1" });
+    try {
+      await page.evaluate(() => {
+        const scope = window as any;
+        scope.pauseCommands = [];
+        scope.__pg.setState({ link: { send: (message: any) => {
+          scope.pauseCommands.push(message);
+          const current = scope.__pg.getState().engine;
+          if (message.cmd === "monitor.update") scope.__pg.setState({
+            engine: { ...current, monitors: current.monitors.map((m: any) => m.id === message.id ? { ...m, ...message.patch } : m) }, pending: {},
+          });
+        } } });
+      });
+      await page.getByRole("switch", { name: "Alert first, then pause" }).click();
+      await expect(page.getByLabel("Pause when")).toBeVisible();
+      for (const trigger of ["score", "alerts", "both", "either"]) {
+        await page.getByLabel("Pause when").selectOption(trigger);
+        await expect.poll(() => page.evaluate(() => (window as any).pauseCommands.at(-1)?.patch.pause_trigger)).toBe(trigger);
+        await expect(page.getByRole("slider", { name: /^Pause threshold/ })).toHaveCount(trigger === "alerts" ? 0 : 1);
+        await expect(page.getByRole("slider", { name: "Consecutive alerts before pause" })).toHaveCount(trigger === "score" ? 0 : 1);
+      }
+      await page.getByRole("button", { name: /Use current score/ }).click();
+      await expect.poll(() => page.evaluate(() => (window as any).pauseCommands.at(-1)?.patch.pause_threshold)).toBe(.6);
+      const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Defect response" }) });
+      await section.screenshot({ path: asset(width === 1360 ? "two-stage.png" : "two-stage-phone.png") });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.getByRole("switch", { name: "Alert first, then pause" }).click();
+      await expect(page.getByLabel("On sustained defect")).toHaveValue("pause");
     } finally {
       await close();
     }

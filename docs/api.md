@@ -198,6 +198,26 @@ collection. A monitor binds one camera and optionally one printer by `camera_id`
 `printer_id`, and carries the thresholds and defect-response policy. Removing a resource
 clears it from any monitor that referenced it.
 
+I can configure two-stage responses through `monitor.add` / `monitor.update` or the monitor
+REST fields, which are also exposed to MCP:
+
+| Field | Values and meaning |
+|---|---|
+| `response_mode` | `single` (default, existing behaviour) or `two_stage` (alert first, then pause) |
+| `threshold`, `consecutive`, `cooldown_s` | First-stage alert score, required scored frames and minimum gap between alert events |
+| `pause_threshold` | Second-stage score, 0.05–1.0, raised to the alert threshold if lower; default 0.90 |
+| `pause_alerts` | Required consecutive alert events, 1–30; default 3 |
+| `pause_trigger` | `score`, `alerts`, `either` (default), or `both` |
+
+In two-stage mode I ignore `on_defect` for automatic responses: stage one alerts only, stage
+two pauses. I preserve `on_defect` for returning to single-stage mode. The count includes
+qualifying alert events, not frames or successful push deliveries, and resets on any healthy
+reading, standby, a model switch or detection-policy change. It is runtime state, not persisted.
+The current event counts toward escalation; an event that triggers pause reports `action: pause`
+instead of a duplicate alert-only event. A high score can pause immediately, without waiting
+for the first-stage streak or cooldown. `both` requires that high score on the same reading
+that finds the count satisfied. The normal alert response carries the pause or failure outcome.
+
 > [!NOTE]
 > Credentials are redacted from this surface. Any printer or notifier config field its
 > adapter marks secret, such as API keys, access codes and bot tokens, is stripped from

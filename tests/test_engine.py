@@ -1749,3 +1749,207 @@ async def test_plugins_survive_a_restart() -> None:
         assert restarted.plugins.get("demo") is None
     finally:
         await restarted.stop()
+
+
+class ScoredPlatform(FakePlatform):
+    """Feeds controlled confidence scores through the real scheduler."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scores: asyncio.Queue[float] = asyncio.Queue()
+
+    async def infer(self, rgb: np.ndarray) -> dict:
+        """Returns the next supplied confidence for a camera frame.
+
+        Args:
+            rgb: Captured frame.
+
+        Returns:
+            A classifier result with controlled failure confidence.
+        """
+        return {"failure_probability": await self.scores.get()}
+
+
+async def _wait_for(predicate) -> None:
+    """Waits for an observable engine event or outgoing printer request."""
+    async with asyncio.timeout(3):
+        while not predicate():
+            await asyncio.sleep(0.005)
+
+
+async def _feed_score(platform: ScoredPlatform, events: list[dict], score: float) -> None:
+    """Feeds one frame and waits until its result reaches the protocol."""
+    count = sum(e.get("event") == "result" for e in events)
+    await platform.scores.put(score)
+    await _wait_for(lambda: sum(e.get("event") == "result" for e in events) > count)
+    await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize("trigger", ["score", "alerts", "either", "both"])
+async def test_two_stage_rules_and_one_pause_per_defect(monkeypatch, trigger) -> None:
+    monkeypatch.setattr(engine_module, "RESULT_EVENT_INTERVAL_S", 0)
+    platform = ScoredPlatform()
+    async with running_engine(platform, [60]) as (engine, events):
+        mid = next(iter(engine.monitors))
+        pid = await _register_printer(engine)
+        await engine.request({"cmd": "monitor.update", "id": mid, "patch": {
+            "printer_id": pid, "response_mode": "two_stage", "on_defect": "cancel",
+            "threshold": .6, "pause_threshold": .9, "pause_trigger": trigger,
+            "pause_alerts": 3, "consecutive": 1, "cooldown_s": 0,
+        }})
+        await _feed_score(platform, events, .7)
+        assert [e["action"] for e in events if e.get("event") == "alert"] == ["none"]
+        assert not platform.action_started.is_set()
+        await _feed_score(platform, events, .95)
+        assert platform.action_started.is_set() == (trigger in ("score", "either"))
+        await _feed_score(platform, events, .95)
+        await _wait_for(lambda: any(e.get("action") == "pause" for e in events))
+        for _ in range(4):
+            await _feed_score(platform, events, .95)
+        assert len([r for r in platform.http_requests if r['url'].endswith('/api/job') and r['method'] == 'POST']) == 1
+        assert sum(e.get("action") == "pause" for e in events) == 1
+
+
+async def test_pause_bypasses_alert_and_notification_cooldowns(monkeypatch) -> None:
+    monkeypatch.setattr(engine_module, "RESULT_EVENT_INTERVAL_S", 0)
+    platform = ScoredPlatform()
+    async with running_engine(platform, [60]) as (engine, events):
+        mid = next(iter(engine.monitors));pid = await _register_printer(engine)
+        await engine.request({"cmd": "settings.update", "patch": {"notifiers": {"ntfy": {"url": "http://ntfy/topic"}}}})
+        await engine.request({"cmd": "monitor.update", "id": mid, "patch": {
+            "printer_id": pid, "response_mode": "two_stage", "pause_trigger": "score",
+            "threshold": .6, "pause_threshold": .9, "consecutive": 2, "cooldown_s": 600, "notify": True,
+        }})
+        await _feed_score(platform, events, .7)
+        assert not any(e.get('event') == 'alert' for e in events)
+        await _feed_score(platform, events, .7)
+        await _wait_for(lambda: any(r['url'] == 'http://ntfy/topic' for r in platform.http_requests))
+        await _feed_score(platform, events, .95)
+        await _wait_for(lambda: len([r for r in platform.http_requests if r['url'] == 'http://ntfy/topic']) == 2)
+        assert [e['action'] for e in events if e.get('event') == 'alert'] == ['none', 'pause']
+
+
+async def test_alert_count_respects_cooldown_and_both_can_pause_between_alerts(monkeypatch) -> None:
+    import time
+    from types import SimpleNamespace
+    clock = [100.0]
+    monkeypatch.setattr(watchdog, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(engine_module, "RESULT_EVENT_INTERVAL_S", 0)
+    platform = ScoredPlatform()
+    async with running_engine(platform, [60]) as (engine, events):
+        mid = next(iter(engine.monitors));pid = await _register_printer(engine)
+        await engine.request({"cmd": "monitor.update", "id": mid, "patch": {
+            "printer_id": pid, "response_mode": "two_stage", "pause_trigger": "both",
+            "threshold": .6, "pause_threshold": .9, "pause_alerts": 3, "consecutive": 1, "cooldown_s": 60,
+        }})
+        for _ in range(4):
+            await _feed_score(platform, events, .7)
+        assert len([e for e in events if e.get('event') == 'alert']) == 1
+        for _ in range(2):
+            clock[0] += 61
+            await _feed_score(platform, events, .7)
+        assert not platform.action_started.is_set()
+        await _feed_score(platform, events, .95)
+        await _wait_for(lambda: any(e.get('action') == 'pause' for e in events))
+
+
+@pytest.mark.parametrize('reset', ['recovery', 'disable', 'policy', 'model'])
+async def test_two_stage_alert_count_resets(monkeypatch, reset) -> None:
+    monkeypatch.setattr(engine_module, "RESULT_EVENT_INTERVAL_S", 0)
+    platform = ScoredPlatform()
+    async with running_engine(platform, [60]) as (engine, events):
+        mid = next(iter(engine.monitors));pid = await _register_printer(engine)
+        await engine.request({"cmd": "monitor.update", "id": mid, "patch": {
+            "printer_id": pid, "response_mode": "two_stage", "pause_trigger": "alerts",
+            "threshold": .6, "pause_threshold": .9, "pause_alerts": 2, "consecutive": 1, "cooldown_s": 0,
+        }})
+        await _feed_score(platform, events, .7)
+        if reset == 'recovery':
+            await _feed_score(platform, events, .2)
+        elif reset == 'disable':
+            await engine.request({"cmd": "monitor.update", "id": mid, "patch": {"enabled": False}})
+            await engine.request({"cmd": "monitor.update", "id": mid, "patch": {"enabled": True}})
+        elif reset == 'policy':
+            await engine.request({"cmd": "monitor.update", "id": mid, "patch": {"pause_threshold": .95}})
+        else:
+            platform.model_selection = True
+            platform.models = [*platform.models, {"id": "other", "name": "Other", "runtimes": ["auto"], "error": None}]
+            await engine.request({"cmd": "settings.update", "patch": {"model_id": "other"}})
+        await _feed_score(platform, events, .7)
+        assert not platform.action_started.is_set()
+        await _feed_score(platform, events, .7)
+        await _wait_for(lambda: any(e.get('action') == 'pause' for e in events))
+
+
+async def test_two_stage_failed_pause_is_reported_without_repeated_requests(monkeypatch) -> None:
+    monkeypatch.setattr(engine_module, "RESULT_EVENT_INTERVAL_S", 0)
+    monkeypatch.setattr(watchdog, 'ACT_RETRY_S', .001)
+    platform = ScoredPlatform();platform.reject_actions = True
+    async with running_engine(platform, [60]) as (engine, events):
+        mid = next(iter(engine.monitors));pid = await _register_printer(engine)
+        await engine.request({"cmd": "monitor.update", "id": mid, "patch": {
+            "printer_id": pid, "response_mode": "two_stage", "pause_trigger": "score", "pause_threshold": .9,
+        }})
+        await _feed_score(platform, events, .95)
+        await _wait_for(lambda: any(e.get('action') == 'failed' for e in events))
+        for _ in range(3):
+            await _feed_score(platform, events, .95)
+        assert len([r for r in platform.http_requests if r['url'].endswith('/api/job') and r['method'] == 'POST']) == watchdog.ACT_ATTEMPTS
+        assert any('automatic pause failed' in e.get('message', '') for e in events)
+
+
+async def test_two_stage_standby_resets_alert_count(monkeypatch) -> None:
+    monkeypatch.setattr(engine_module, "RESULT_EVENT_INTERVAL_S", 0)
+    monkeypatch.setattr(watchdog, 'DEVICE_POLL_S', .01)
+    platform = ScoredPlatform()
+    async with running_engine(platform, [60]) as (engine, events):
+        mid = next(iter(engine.monitors));pid = await _register_printer(engine)
+        await engine.request({"cmd": "monitor.update", "id": mid, "patch": {
+            "printer_id": pid, "response_mode": "two_stage", "pause_trigger": "alerts",
+            "threshold": .6, "pause_alerts": 2, "consecutive": 1, "cooldown_s": 0,
+        }})
+        await _feed_score(platform, events, .7)
+        platform.device_status = 'Operational'
+        await _wait_for(lambda: not engine.state_event()['monitors'][0]['watching'])
+        platform.device_status = 'Printing'
+        await _wait_for(lambda: engine.state_event()['monitors'][0]['watching'])
+        await _feed_score(platform, events, .7)
+        assert not platform.action_started.is_set()
+        await _feed_score(platform, events, .7)
+        await _wait_for(lambda: any(e.get('action') == 'pause' for e in events))
+
+
+async def test_two_stage_missing_printer_reports_failure(monkeypatch) -> None:
+    monkeypatch.setattr(engine_module, "RESULT_EVENT_INTERVAL_S", 0)
+    platform = ScoredPlatform()
+    async with running_engine(platform, [60]) as (engine, events):
+        mid = next(iter(engine.monitors))
+        await engine.request({"cmd": "monitor.update", "id": mid, "patch": {'response_mode': 'two_stage', 'pause_trigger': 'score'}})
+        await _feed_score(platform, events, .95)
+        await _wait_for(lambda: any(e.get('action') == 'failed' for e in events))
+        assert any('no printer linked' in e.get('message', '') for e in events)
+
+
+async def test_two_stage_settings_persist_without_enabling_legacy_monitors() -> None:
+    platform = FakePlatform()
+    platform.state = {'monitors': [{'id': 'legacy', 'on_defect': 'cancel'}]}
+    engine = Engine(platform)
+    await engine.start()
+    try:
+        old = engine.state_event()['monitors'][0]
+        assert old['response_mode'] == 'single' and old['on_defect'] == 'cancel'
+        await engine.request({'cmd': 'monitor.update', 'id': 'legacy', 'patch': {
+            'response_mode': 'two_stage', 'pause_trigger': 'both', 'pause_threshold': .95, 'pause_alerts': 4,
+        }})
+    finally:
+        await engine.stop()
+    restarted = Engine(platform)
+    await restarted.start()
+    try:
+        record = restarted.state_event()['monitors'][0]
+        assert record['response_mode'] == 'two_stage'
+        assert record['pause_trigger'] == 'both'
+        assert record['pause_threshold'] == .95 and record['pause_alerts'] == 4
+        assert record['on_defect'] == 'cancel'
+    finally:
+        await restarted.stop()

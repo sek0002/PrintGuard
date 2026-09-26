@@ -149,7 +149,7 @@ export function DetailPanel({ monitor }: { monitor: Monitor }) {
               min={0.2}
               max={5}
               step={0.1}
-              hint="How decisively the model scores each frame. Raise if real defects read too low; lower if clean prints get flagged."
+              hint="Scales scores away from 0.5. Higher sensitivity raises scores above 0.5 and lowers scores below it. Retune both thresholds after changing this."
               onChange={(v) => updateMonitor(monitor.id, { sensitivity: v })}
             />
             <Slider
@@ -167,14 +167,50 @@ export function DetailPanel({ monitor }: { monitor: Monitor }) {
 
         <Section title="Defect response">
           <div className="space-y-4">
-            <label className="block">
-              <span className="label block mb-1">On sustained defect</span>
-              <select className="field" value={monitor.on_defect} onChange={(e) => updateMonitor(monitor.id, { on_defect: e.target.value as Monitor["on_defect"] })}>
-                <option value="none">Alert only</option>
-                <option value="pause">Pause the print</option>
-                <option value="cancel">Cancel the print</option>
-              </select>
-            </label>
+            <Toggle
+              label="Alert first, then pause"
+              on={monitor.response_mode === "two_stage"}
+              onChange={(v) => updateMonitor(monitor.id, { response_mode: v ? "two_stage" : "single" })}
+            />
+            {monitor.response_mode === "two_stage" ? (
+              <>
+                <p className="text-xs text-text-2">The first threshold only alerts. Pause separately using the live score, consecutive alert events, or a combination.</p>
+                <label className="block">
+                  <span className="label block mb-1">Pause when</span>
+                  <select className="field" value={monitor.pause_trigger} onChange={(e) => updateMonitor(monitor.id, { pause_trigger: e.target.value as Monitor["pause_trigger"] })}>
+                    <option value="score">Live score reaches pause threshold</option>
+                    <option value="alerts">Consecutive alert count is reached</option>
+                    <option value="either">Either condition is met</option>
+                    <option value="both">Both conditions are met</option>
+                  </select>
+                </label>
+                {monitor.pause_trigger !== "alerts" && (
+                  <>
+                    <Slider label="Pause threshold" value={monitor.pause_threshold} min={monitor.threshold} max={1} step={0.01}
+                      hint="One live reading at or above this score satisfies the score condition, even during the alert cooldown."
+                      onChange={(v) => updateMonitor(monitor.id, { pause_threshold: v })} />
+                    <button className="btn" onClick={() => updateMonitor(monitor.id, { pause_threshold: Math.max(monitor.threshold, Math.min(1, Math.round(score * 100) / 100)) })}>
+                      Use current score ({score.toFixed(2)})
+                    </button>
+                  </>
+                )}
+                {monitor.pause_trigger !== "score" && (
+                  <Slider label="Consecutive alerts before pause" value={monitor.pause_alerts} min={1} max={30} step={1} format={String}
+                    hint="Counts alert events after the detection streak and cooldown, not individual frames or delivered notifications. Any score below the alert threshold resets the count."
+                    onChange={(v) => updateMonitor(monitor.id, { pause_alerts: v })} />
+                )}
+                <p className="text-xs text-text-2">A pause is attempted once per continuous defect, with failures reported. Counts reset after recovery, standby, model changes or detection setting changes. {!linked && "Link a printer to enable pausing."}</p>
+              </>
+            ) : (
+              <label className="block">
+                <span className="label block mb-1">On sustained defect</span>
+                <select className="field" value={monitor.on_defect} onChange={(e) => updateMonitor(monitor.id, { on_defect: e.target.value as Monitor["on_defect"] })}>
+                  <option value="none">Alert only</option>
+                  <option value="pause">Pause the print</option>
+                  <option value="cancel">Cancel the print</option>
+                </select>
+              </label>
+            )}
             <Slider
               label="Cooldown (seconds)"
               value={monitor.cooldown_s}
@@ -182,7 +218,7 @@ export function DetailPanel({ monitor }: { monitor: Monitor }) {
               max={600}
               step={10}
               format={String}
-              hint="Quiet gap after acting before it can act again. Raise to avoid repeat alerts on one failure."
+              hint="Minimum gap between alert events. The separate pause rule is checked on every live reading and bypasses this cooldown."
               onChange={(v) => updateMonitor(monitor.id, { cooldown_s: v })}
             />
             <Toggle label="Push notifications" on={monitor.notify} onChange={(v) => updateMonitor(monitor.id, { notify: v })} />

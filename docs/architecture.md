@@ -314,6 +314,20 @@ sequenceDiagram
 A failed printer action is retried, then reported in the alert, the UI error feed and the
 push notification.
 
+I keep the diagram above for the default single-stage response. With `response_mode: two_stage`,
+the first-stage streak and cooldown schedule alert-only responses and increment an in-memory
+alert count. Independently, every score checks `pause_trigger`: the live `pause_threshold`,
+the `pause_alerts` count, either condition or both. Pausing bypasses the alert cooldown and
+has a separate notification throttle so an earlier warning cannot hide its outcome. I latch
+one pause attempt per continuous defect and track pending actions to prevent overlapping
+requests. Failed attempts remain latched after bounded retries and report an error.
+
+I clear streaks, counts and pause latches on recovery, standby, monitor removal, detection
+configuration changes and model changes. Queued pauses carry a detection generation so a
+reset invalidates obsolete work before the request is sent. In-flight I/O remains asynchronous.
+Counts and latches do not survive restart; existing persisted monitors default to single-stage
+responses. All decisions live in the shared watchdog and apply equally to browser and hub mode.
+
 ## Failing safely
 
 A monitor's watching state gates inference

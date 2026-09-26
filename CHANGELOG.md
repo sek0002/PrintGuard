@@ -7,6 +7,14 @@ release notes.
 The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-09-26
+
+### Added
+
+- I added an optional two-stage response: the first threshold alerts only, while a separate rule pauses on a live score, a consecutive alert count, either condition or both. I can set the pause threshold from the current reading in monitor details.
+- I keep alert cooldowns separate from pause escalation, reset alert counts on recovery, standby and detection changes, and prevent repeated pause attempts within one continuous defect. Pause failures are reported even if an alert notification was just sent.
+- I preserve existing single-stage responses until I enable **Alert first, then pause**. Model presets do not enable pausing or set the alert-count rule.
+
 ## [2.8.0] - 2026-09-13
 
 ### Added

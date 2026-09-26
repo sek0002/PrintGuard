@@ -97,6 +97,10 @@ class MonitorFields(BaseModel):
     consecutive: int | None = None
     notify: bool | None = None
     on_defect: Literal["none", "pause", "cancel"] | None = None
+    response_mode: Literal["single", "two_stage"] | None = None
+    pause_trigger: Literal["score", "alerts", "either", "both"] | None = None
+    pause_threshold: float | None = None
+    pause_alerts: int | None = None
     cooldown_s: int | None = None
 
 
@@ -194,6 +198,10 @@ class MonitorOut(_ReadModel):
     consecutive: int | None = None
     notify: bool | None = None
     on_defect: Literal["none", "pause", "cancel"] | None = None
+    response_mode: Literal["single", "two_stage"] | None = None
+    pause_trigger: Literal["score", "alerts", "either", "both"] | None = None
+    pause_threshold: float | None = None
+    pause_alerts: int | None = None
     cooldown_s: int | None = None
     watching: bool | None = None
     result: MonitorResult | None = None

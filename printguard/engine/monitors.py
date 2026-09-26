@@ -21,6 +21,10 @@ MONITOR_DEFAULTS: dict[str, Any] = {
     "consecutive": 3,
     "notify": False,
     "on_defect": "none",
+    "response_mode": "single",
+    "pause_trigger": "either",
+    "pause_threshold": 0.9,
+    "pause_alerts": 3,
     "cooldown_s": 60,
 }
 
@@ -62,7 +66,7 @@ def sanitise_monitor(monitor_id: str, patch: dict[str, Any], base: dict[str, Any
     Returns:
         A complete, validated monitor record.
     """
-    record = {**(base or MONITOR_DEFAULTS), **patch, "id": monitor_id}
+    record = {**MONITOR_DEFAULTS, **(base or {}), **patch, "id": monitor_id}
     record["name"] = str(record["name"]).strip() or "Monitor"
     record["threshold"] = _clamp("threshold", float(record["threshold"]))
     record["sensitivity"] = _clamp("sensitivity", float(record["sensitivity"]))
@@ -72,6 +76,12 @@ def sanitise_monitor(monitor_id: str, patch: dict[str, Any], base: dict[str, Any
     record["notify"] = bool(record["notify"])
     if record["on_defect"] not in ("none", "pause", "cancel"):
         record["on_defect"] = "none"
+    if record["response_mode"] not in ("single", "two_stage"):
+        raise ValueError("Choose single or two_stage response mode")
+    if record["pause_trigger"] not in ("score", "alerts", "either", "both"):
+        raise ValueError("Choose score, alerts, either or both for pausing")
+    record["pause_threshold"] = max(record["threshold"], _clamp("threshold", float(record["pause_threshold"])))
+    record["pause_alerts"] = max(1, min(30, int(record["pause_alerts"])))
     return record
 
 

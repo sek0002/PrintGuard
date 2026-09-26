@@ -68,6 +68,10 @@ class Watchdog:
         self._engine = engine
         self._streaks: dict[str, int] = {}
         self._cooldown_until: dict[str, float] = {}
+        self._alert_counts: dict[str, int] = {}
+        self._paused: set[str] = set()
+        self._pausing: set[str] = set()
+        self._generations: dict[str, int] = {}
         self._last_notified: dict[str, float] = {}
         self._down_since: dict[str, float] = {}
         self._healthy_since: dict[str, float] = {}
@@ -84,9 +88,23 @@ class Watchdog:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def reset_detection(self) -> None:
-        """Starts fresh detection streaks after a model switch, preserving alert cooldowns."""
-        self._streaks.clear()
+    def reset_detection(self, monitor_id: str | None = None) -> None:
+        """Clears detection and escalation state while preserving cooldowns.
+
+        Args:
+            monitor_id: Monitor to reset, or all monitors when omitted.
+        """
+        ids = list(self._engine.monitors) if monitor_id is None else [monitor_id]
+        for mid in ids:
+            self._generations[mid] = self._generations.get(mid, 0) + 1
+        if monitor_id is None:
+            self._streaks.clear()
+            self._alert_counts.clear()
+            self._paused.clear()
+        else:
+            self._streaks.pop(monitor_id, None)
+            self._alert_counts.pop(monitor_id, None)
+            self._paused.discard(monitor_id)
 
     async def close(self) -> None:
         """Cancels pending printer actions and notifications."""
@@ -120,7 +138,7 @@ class Watchdog:
                 self._engine.cameras.sync_in_use(self._engine.monitors, self._engine.printers)
                 for monitor in self._engine.monitors.values():
                     if not monitor_watching(monitor, self._engine.printers):
-                        self._streaks.pop(monitor["id"], None)
+                        self.reset_detection(monitor["id"])
             await asyncio.sleep(DEVICE_POLL_S)
 
     async def watch_health(self) -> None:
@@ -317,32 +335,67 @@ class Watchdog:
         """
         mid = monitor["id"]
         if score < monitor["threshold"]:
-            self._streaks[mid] = 0
+            self.reset_detection(mid)
             if monitor.get("alert"):
                 monitor["alert"] = None
             return
         self._streaks[mid] = self._streaks.get(mid, 0) + 1
-        if self._streaks[mid] < monitor["consecutive"] or time.monotonic() < self._cooldown_until.get(mid, 0.0):
+        now = time.monotonic()
+        alert_due = self._streaks[mid] >= monitor["consecutive"] and now >= self._cooldown_until.get(mid, 0.0)
+        if monitor["response_mode"] == "single":
+            if alert_due:
+                self._cooldown_until[mid] = now + monitor["cooldown_s"]
+                self._schedule(self._respond(monitor, frame, score))
             return
-        self._cooldown_until[mid] = time.monotonic() + monitor["cooldown_s"]
-        self._schedule(self._respond(monitor, frame, score))
+        if mid in self._paused or mid in self._pausing:
+            return
+        if alert_due:
+            self._alert_counts[mid] = self._alert_counts.get(mid, 0) + 1
+            self._cooldown_until[mid] = now + monitor["cooldown_s"]
+        high_score = score >= monitor["pause_threshold"]
+        enough_alerts = self._alert_counts.get(mid, 0) >= monitor["pause_alerts"]
+        pause_due = {
+            "score": high_score,
+            "alerts": enough_alerts,
+            "either": high_score or enough_alerts,
+            "both": high_score and enough_alerts,
+        }[monitor["pause_trigger"]]
+        if pause_due:
+            self._paused.add(mid)
+            self._pausing.add(mid)
+            self._schedule(self._pause(monitor, frame, score, self._generations.get(mid, 0)))
+        elif alert_due:
+            self._schedule(self._respond(monitor, frame, score, wanted="none"))
 
-    async def _respond(self, monitor: dict[str, Any], frame: Frame, score: float) -> None:
-        action = await self._act(monitor)
+    async def _pause(self, monitor: dict[str, Any], frame: Frame, score: float, generation: int) -> None:
+        try:
+            current = self._engine.monitors.get(monitor["id"])
+            if current and self._generations.get(monitor["id"], 0) == generation and monitor_watching(current, self._engine.printers):
+                await self._respond(current, frame, score, wanted="pause")
+        finally:
+            self._pausing.discard(monitor["id"])
+
+    async def _respond(self, monitor: dict[str, Any], frame: Frame, score: float, wanted: str | None = None) -> None:
+        wanted = monitor["on_defect"] if wanted is None else wanted
+        action = await self._act(monitor, wanted)
         alert = {"score": round(score, 3), "action": action, "ts": time.time()}
         if self._streaks.get(monitor["id"], 0):
             monitor["alert"] = alert
         self._engine.emit({"event": "alert", "monitor_id": monitor["id"], **alert})
         image = await self._engine.platform.encode_jpeg(frame.rgb)
         self._engine.note_alert(monitor["id"], alert, image)
-        await self._notify(monitor, score, action, image)
+        await self._notify(monitor, score, action, image, wanted)
 
-    async def _act(self, monitor: dict[str, Any]) -> str:
-        wanted = monitor.get("on_defect", "none")
+    async def _act(self, monitor: dict[str, Any], wanted: str) -> str:
         printer = self._engine.printers.get(monitor.get("printer_id") or "")
         adapter = INTEGRATIONS.get(printer.provider) if printer else None
-        if wanted == "none" or not adapter or printer is None:
+        if wanted == "none":
             return "none"
+        if not adapter or printer is None:
+            if monitor["response_mode"] == "single":
+                return "none"
+            self._engine.emit({"event": "error", "message": f"{monitor['name']}: automatic {wanted} failed: no printer linked"})
+            return "failed"
         action = DeviceAction.PAUSE if wanted == "pause" else DeviceAction.CANCEL
         last_error: Exception | None = None
         for _ in range(ACT_ATTEMPTS):
@@ -356,17 +409,18 @@ class Watchdog:
         self._engine.emit({"event": "error", "message": f"{monitor['name']}: automatic {wanted} failed: {last_error}"})
         return "failed"
 
-    async def _notify(self, monitor: dict[str, Any], score: float, action: str, image: bytes | None) -> None:
+    async def _notify(self, monitor: dict[str, Any], score: float, action: str, image: bytes | None, wanted: str) -> None:
         if not monitor.get("notify"):
             return
-        if time.monotonic() - self._last_notified.get(monitor["id"], 0.0) < NOTIFY_COOLDOWN_S:
+        notification_key = monitor["id"] + (":pause" if monitor["response_mode"] == "two_stage" and wanted == "pause" else "")
+        if time.monotonic() - self._last_notified.get(notification_key, 0.0) < NOTIFY_COOLDOWN_S:
             return
-        self._last_notified[monitor["id"]] = time.monotonic()
+        self._last_notified[notification_key] = time.monotonic()
         title = f"PrintGuard: {monitor['name']} defect ({score * 100:.0f}%)"
         if action == "failed":
-            body = f"AUTOMATIC {monitor['on_defect'].upper()} FAILED, check the printer"
+            body = f"AUTOMATIC {wanted.upper()} FAILED, check the printer"
         elif action == "none":
-            body = "Alert only: no printer action configured"
+            body = "Alert only: pause conditions not reached" if monitor["response_mode"] == "two_stage" else "Alert only: no printer action configured"
         else:
             body = f"Action taken: {action}"
         await self._engine.send_alerts(title, body, image)
